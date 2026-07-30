@@ -198,9 +198,9 @@ button {
   <div class="card">
     <label for="sourceSelect">Data source</label>
     <select id="sourceSelect" onchange="onSourceChange()">
-      <option value="auto" selected>Auto — visitor's current location (Open-Meteo, no key needed)</option>
+      <option value="auto" selected>Auto — my current location (Open-Meteo, no key needed)</option>
       <option value="manual">Manual coordinates (Open-Meteo)</option>
-      <option value="ambient">Live station data</option>
+      <option value="ambient">Shakurbasti weather station</option>
     </select>
 
     <div class="subfield hidden" id="manualFields">
@@ -347,10 +347,8 @@ function setStatus(text, isError) {
 function onSourceChange() {
   const source = document.getElementById('sourceSelect').value;
   document.getElementById('manualFields').classList.toggle('hidden', source !== 'manual');
-  document.getElementById('ambientFields').classList.toggle('hidden', source !== 'ambient');
-  if (source === 'ambient') {
-    document.getElementById('ambientWorkerUrl').value = DEFAULT_WORKER_URL;
-  }
+  // ambientFields (worker URL + hint) stays hidden always — it's informational only
+  // and fetchAndPlot() reads DEFAULT_WORKER_URL directly, not this field.
 }
 
 // ================== Location helpers ==================
@@ -436,7 +434,7 @@ async function fetchAndPlot() {
         throw new Error('Owner setup needed: paste your real worker URL into DEFAULT_WORKER_URL near the top of the <script> section.');
       }
       reading = await fetchAmbient(workerUrl);
-      locationLabel = 'Ambient Weather station';
+      locationLabel = 'Shakurbasti weather station';
     }
 
     const history = loadHistory();
