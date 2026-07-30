@@ -198,9 +198,9 @@ button {
   <div class="card">
     <label for="sourceSelect">Data source</label>
     <select id="sourceSelect" onchange="onSourceChange()">
-      <option value="auto">Auto — my current location (Open-Meteo, no key needed)</option>
+      <option value="ambient" selected>Live station data (default)</option>
+      <option value="auto">Auto — visitor's current location (Open-Meteo, no key needed)</option>
       <option value="manual">Manual coordinates (Open-Meteo)</option>
-      <option value="ambient">My Ambient Weather station</option>
     </select>
 
     <div class="subfield hidden" id="manualFields">
@@ -211,8 +211,8 @@ button {
     </div>
 
     <div class="subfield hidden" id="ambientFields">
-      <input type="text" id="ambientWorkerUrl" placeholder="Your worker proxy URL, e.g. https://ambient-weather-proxy.you.workers.dev" value="https://ambient-weather-proxy.heatstress.workers.dev/">
-      <div class="hint">This page never holds your MAC address or API keys — it calls your own Cloudflare Worker, which keeps those secret and returns just the temperature and humidity. See the worker README for setup.</div>
+      <input type="text" id="ambientWorkerUrl" value="" readonly style="background:#eee; color:#555;">
+      <div class="hint">Visitors never see or enter any key. This page calls the worker URL above only, which is hardcoded in the page's DEFAULT_WORKER_URL setting and only ever returns temperature/humidity — never your credentials.</div>
     </div>
   </div>
 
@@ -246,6 +246,12 @@ button {
 </div>
 
 <script>
+// ================== Owner configuration ==================
+// Paste your Cloudflare Worker URL here once (see the worker README for setup).
+// This is NOT a secret — it can't be used to pull your data without the keys
+// the worker holds — so it's fine that it lives in this public page's source.
+const DEFAULT_WORKER_URL = 'https://ambient-weather-proxy.YOUR-SUBDOMAIN.workers.dev';
+
 // ================== Zone boundary math (unchanged from original) ==================
 function safeCautionBoundary(rh) {
   return 40.1247562 - 0.287219702 * rh + 0.00195590150 * rh * rh - 0.00000452294349 * rh * rh * rh;
@@ -342,6 +348,9 @@ function onSourceChange() {
   const source = document.getElementById('sourceSelect').value;
   document.getElementById('manualFields').classList.toggle('hidden', source !== 'manual');
   document.getElementById('ambientFields').classList.toggle('hidden', source !== 'ambient');
+  if (source === 'ambient') {
+    document.getElementById('ambientWorkerUrl').value = DEFAULT_WORKER_URL;
+  }
 }
 
 // ================== Location helpers ==================
@@ -422,8 +431,10 @@ async function fetchAndPlot() {
       reading = await fetchOpenMeteo(lat, lon);
       locationLabel = await reverseGeocode(lat, lon);
     } else {
-      const workerUrl = document.getElementById('ambientWorkerUrl').value.trim();
-      if (!workerUrl) throw new Error('Enter your worker proxy URL (see the worker README for setup steps).');
+      const workerUrl = DEFAULT_WORKER_URL;
+      if (!workerUrl || workerUrl.includes('YOUR-SUBDOMAIN')) {
+        throw new Error('Owner setup needed: paste your real worker URL into DEFAULT_WORKER_URL near the top of the <script> section.');
+      }
       reading = await fetchAmbient(workerUrl);
       locationLabel = 'Ambient Weather station';
     }
@@ -502,7 +513,15 @@ function renderPlot(history) {
 }
 
 function plotConfig() {
-  return {responsive: true, displaylogo: false, scrollZoom: false};
+  return {
+    responsive: true,
+    displaylogo: false,
+    scrollZoom: false,           // mouse-wheel / trackpad pinch zoom disabled
+    doubleClick: false,          // double-click-to-reset-zoom disabled
+    modeBarButtonsToRemove: [    // remove zoom-related icons from the toolbar
+      'zoom2d', 'zoomIn2d', 'zoomOut2d', 'pan2d', 'autoScale2d', 'resetScale2d'
+    ]
+  };
 }
 
 function baseLayout() {
@@ -511,9 +530,11 @@ function baseLayout() {
   return {
     paper_bgcolor: 'white',
     plot_bgcolor: 'white',
+    dragmode: false,        // disables box-zoom / drag-to-zoom on the plot area
     xaxis: {
       title: {text: '<b>Relative Humidity (%)</b>', font:{size: mobile ? 13 : 20}},
       range: [10, 100],
+      fixedrange: true,     // locks this axis so it cannot be zoomed or panned
       dtick: 10,
       gridcolor: 'rgba(0,0,0,0.15)',
       tickfont: {size: mobile ? 10 : 12}
@@ -521,6 +542,7 @@ function baseLayout() {
     yaxis: {
       title: {text: '<b>Temperature (°C)</b>', font:{size: mobile ? 13 : 20}},
       range: [20, 42.5],
+      fixedrange: true,     // locks this axis so it cannot be zoomed or panned
       dtick: mobile ? 2 : 0.5,
       gridcolor: 'rgba(0,0,0,0.15)',
       tickfont: {size: mobile ? 10 : 12}
