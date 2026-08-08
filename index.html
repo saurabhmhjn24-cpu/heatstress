@@ -29,7 +29,7 @@ body {
 
 .controls {
   display: grid;
-  grid-template-columns: 1.4fr 1fr auto auto auto;
+  grid-template-columns: 1.2fr 1fr 1fr auto auto auto;
   gap: 10px;
   align-items: end;
   margin-bottom: 12px;
@@ -136,8 +136,9 @@ button {
   .controls {
     grid-template-columns: 1fr 1fr;
   }
-  .controls .card:first-child {
-    grid-column: 1 / -1; /* data source card takes full width */
+  .controls .card:first-child,
+  .controls .card:nth-child(2) {
+    grid-column: 1 / -1; /* data source and date/time cards take full width */
   }
   .controls button {
     grid-column: span 1;
@@ -198,8 +199,9 @@ button {
   <div class="card">
     <label for="sourceSelect">Data source</label>
     <select id="sourceSelect" onchange="onSourceChange()">
-      <option value="auto" selected>Auto — my current location (Open-Meteo, no key needed)</option>
-      <option value="manual">Manual coordinates (Open-Meteo)</option>
+      <option value="auto" selected>My current location</option>
+      <option value="manual">Manual coordinates</option>
+      <option value="manualdata">Enter temperature &amp; humidity</option>
       <option value="ambient">Shakurbasti weather station</option>
     </select>
 
@@ -210,9 +212,30 @@ button {
       </div>
     </div>
 
+    <div class="subfield hidden" id="manualDataFields">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <input type="text" id="manualTemp" placeholder="Temperature °C e.g. 34.5" style="flex:1; min-width:120px;">
+        <input type="text" id="manualRh" placeholder="Humidity % e.g. 55" style="flex:1; min-width:120px;">
+      </div>
+    </div>
+
     <div class="subfield hidden" id="ambientFields">
       <input type="text" id="ambientWorkerUrl" value="" readonly style="background:#eee; color:#555;">
       <div class="hint">Visitors never see or enter any key. This page calls the worker URL above only, which is hardcoded in the page's DEFAULT_WORKER_URL setting and only ever returns temperature/humidity — never your credentials.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="useHistoricalToggle" style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:6px;">
+      <input type="checkbox" id="useHistoricalToggle" onchange="onHistoricalToggle()" style="width:auto; height:16px;">
+      Use a specific date &amp; time
+    </label>
+    <div class="subfield hidden" id="historicalFields">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <input type="date" id="histDate" style="flex:1; min-width:140px;">
+        <input type="time" id="histTime" step="3600" style="flex:1; min-width:120px;">
+      </div>
+      <div class="hint">Applies to My current location, Manual coordinates, and Shakurbasti weather station. Past dates pull historical weather; future dates (up to ~16 days ahead) pull the forecast.</div>
     </div>
   </div>
 
@@ -241,7 +264,7 @@ button {
 </div>
 
 <div class="source-note" style="margin-top: 15px; text-align: center; font-size: 14px; color: #555; font-style: italic;">
-  Data compiled at Station Health Organisation, Shakurbasti
+  Conceptualized and prepared by Saurabh Mahajan, Station Health Organisation Shakurbasti
 </div>
 </div>
 
@@ -347,8 +370,53 @@ function setStatus(text, isError) {
 function onSourceChange() {
   const source = document.getElementById('sourceSelect').value;
   document.getElementById('manualFields').classList.toggle('hidden', source !== 'manual');
+  document.getElementById('manualDataFields').classList.toggle('hidden', source !== 'manualdata');
   // ambientFields (worker URL + hint) stays hidden always — it's informational only
   // and fetchAndPlot() reads DEFAULT_WORKER_URL directly, not this field.
+}
+
+// ================== Historical / Forecast date & time selection ==================
+function onHistoricalToggle() {
+  const checked = document.getElementById('useHistoricalToggle').checked;
+  document.getElementById('historicalFields').classList.toggle('hidden', !checked);
+
+  // A fixed historical/forecast point doesn't make sense to keep auto-refreshing —
+  // turn auto-refresh off and lock it while this mode is active, restore on uncheck.
+  const intervalSelect = document.getElementById('intervalSelect');
+  if (checked) {
+    intervalSelect.dataset.previousValue = intervalSelect.value;
+    intervalSelect.value = '0';
+    intervalSelect.disabled = true;
+  } else {
+    intervalSelect.disabled = false;
+    intervalSelect.value = intervalSelect.dataset.previousValue || '5';
+  }
+  setupAutoRefresh();
+}
+
+// Returns a JS Date for the chosen historical/forecast point, or null if the
+// toggle is off (meaning: use "now", exactly as the page always has).
+function getTargetDateTime() {
+  const useHist = document.getElementById('useHistoricalToggle').checked;
+  if (!useHist) return null;
+
+  const dateVal = document.getElementById('histDate').value;
+  const timeVal = document.getElementById('histTime').value || '00:00';
+  if (!dateVal) throw new Error('Select a date for the historical/forecast lookup.');
+
+  const dt = new Date(`${dateVal}T${timeVal}:00`);
+  if (isNaN(dt.getTime())) throw new Error('Invalid date/time selected.');
+  return dt;
+}
+
+// yyyy-mm-dd in the browser's LOCAL time (not UTC) — needed because Open-Meteo's
+// start_date/end_date parameters are calendar dates, and using toISOString()
+// (which is UTC) can shift the date by a day depending on timezone offset.
+function isoDateStr(d) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 // ================== Location helpers ==================
@@ -376,24 +444,73 @@ async function reverseGeocode(lat, lon) {
 }
 
 // ================== Data fetchers ==================
-async function fetchOpenMeteo(lat, lon) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m&timezone=auto`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('Open-Meteo request failed (' + res.status + ')');
-  const d = await res.json();
-  if (!d.current) throw new Error('Open-Meteo returned no current data.');
+async function fetchOpenMeteo(lat, lon, targetDate) {
+  // Live mode (unchanged from before) — exact current reading.
+  if (!targetDate) {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m&timezone=auto`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Open-Meteo request failed (' + res.status + ')');
+    const d = await res.json();
+    if (!d.current) throw new Error('Open-Meteo returned no current data.');
+    return {
+      temp_c: d.current.temperature_2m,
+      rh: d.current.relative_humidity_2m,
+      time: new Date()
+    };
+  }
+
+  // Historical/forecast mode — look up a specific date + hour.
+  const dateStr = isoDateStr(targetDate);
+  const hour = targetDate.getHours();
+  const todayStr = isoDateStr(new Date());
+  const isPast = dateStr < todayStr;
+
+  async function queryEndpoint(base) {
+    const url = `${base}?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,relative_humidity_2m&start_date=${dateStr}&end_date=${dateStr}&timezone=auto`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (!d.hourly || !Array.isArray(d.hourly.time)) return null;
+    const idx = d.hourly.time.findIndex(t => t.endsWith(`T${String(hour).padStart(2, '0')}:00`));
+    if (idx === -1) return null;
+    const temp = d.hourly.temperature_2m[idx];
+    const rh = d.hourly.relative_humidity_2m[idx];
+    if (temp === undefined || temp === null || rh === undefined || rh === null) return null;
+    return { temp_c: temp, rh: rh };
+  }
+
+  let result = null;
+  if (isPast) {
+    // The dedicated historical archive; usually has a few days' lag, so if it
+    // doesn't yet have the requested date, fall back to the forecast endpoint,
+    // which also serves a recent window of past days.
+    result = await queryEndpoint('https://archive-api.open-meteo.com/v1/archive');
+    if (!result) result = await queryEndpoint('https://api.open-meteo.com/v1/forecast');
+  } else {
+    result = await queryEndpoint('https://api.open-meteo.com/v1/forecast');
+  }
+
+  if (!result) {
+    throw new Error(`No ${isPast ? 'historical' : 'forecast'} data available for ${dateStr} ${String(hour).padStart(2, '0')}:00. Forecasts are only available up to about 16 days ahead.`);
+  }
+
   return {
-    temp_c: d.current.temperature_2m,
-    rh: d.current.relative_humidity_2m,
-    time: new Date()
+    temp_c: result.temp_c,
+    rh: result.rh,
+    time: new Date(targetDate)
   };
 }
 
-async function fetchAmbient(workerUrl) {
+async function fetchAmbient(workerUrl, targetDate) {
   // Calls YOUR Cloudflare Worker proxy, not Ambient Weather directly.
   // The worker holds the MAC address / API key / Application key as secrets
   // server-side, so none of them ever reach this page or its source code.
-  const res = await fetch(workerUrl);
+  // When targetDate is provided, asks the worker for the historical reading
+  // nearest that timestamp instead of the current one.
+  const url = targetDate
+    ? `${workerUrl}${workerUrl.includes('?') ? '&' : '?'}endDate=${targetDate.getTime()}`
+    : workerUrl;
+  const res = await fetch(url);
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json()).error || ''; } catch (e) {}
@@ -406,34 +523,52 @@ async function fetchAmbient(workerUrl) {
   return {
     temp_c: d.temp_c,
     rh: d.rh,
-    time: d.observed_at ? new Date(d.observed_at) : new Date()
+    time: d.observed_at ? new Date(d.observed_at) : (targetDate || new Date())
   };
 }
 
 // ================== Main fetch + plot cycle ==================
 async function fetchAndPlot() {
   const source = document.getElementById('sourceSelect').value;
-  setStatus('Fetching latest reading…', false);
+
+  let targetDateTime;
+  try {
+    targetDateTime = getTargetDateTime(); // null = live/"now", exactly as before
+  } catch (err) {
+    setStatus('Error: ' + err.message, true);
+    return;
+  }
+  const isHistorical = targetDateTime !== null;
+
+  setStatus(isHistorical ? 'Fetching historical/forecast reading…' : 'Fetching latest reading…', false);
 
   try {
     let reading, locationLabel;
 
     if (source === 'auto') {
       const {lat, lon} = await getBrowserLocation();
-      reading = await fetchOpenMeteo(lat, lon);
+      reading = await fetchOpenMeteo(lat, lon, targetDateTime);
       locationLabel = await reverseGeocode(lat, lon);
     } else if (source === 'manual') {
       const lat = parseFloat(document.getElementById('manualLat').value);
       const lon = parseFloat(document.getElementById('manualLon').value);
       if (isNaN(lat) || isNaN(lon)) throw new Error('Enter valid latitude and longitude.');
-      reading = await fetchOpenMeteo(lat, lon);
+      reading = await fetchOpenMeteo(lat, lon, targetDateTime);
       locationLabel = await reverseGeocode(lat, lon);
+    } else if (source === 'manualdata') {
+      // No API call at all — just read the two typed-in values directly.
+      const temp = parseFloat(document.getElementById('manualTemp').value);
+      const rh = parseFloat(document.getElementById('manualRh').value);
+      if (isNaN(temp) || isNaN(rh)) throw new Error('Enter both a temperature (°C) and a humidity (%) value.');
+      if (rh < 0 || rh > 100) throw new Error('Humidity must be between 0 and 100%.');
+      reading = { temp_c: temp, rh: rh, time: targetDateTime || new Date() };
+      locationLabel = 'Manually entered reading';
     } else {
       const workerUrl = DEFAULT_WORKER_URL;
       if (!workerUrl || workerUrl.includes('YOUR-SUBDOMAIN')) {
         throw new Error('Owner setup needed: paste your real worker URL into DEFAULT_WORKER_URL near the top of the <script> section.');
       }
-      reading = await fetchAmbient(workerUrl);
+      reading = await fetchAmbient(workerUrl, targetDateTime);
       locationLabel = 'Shakurbasti weather station';
     }
 
@@ -447,7 +582,13 @@ async function fetchAndPlot() {
     saveHistory(history);
     renderPlot(history);
 
-    setStatus(`Live — ${locationLabel} — ${reading.temp_c.toFixed(1)}°C, ${reading.rh.toFixed(0)}% RH (${heatZone(reading.temp_c, reading.rh)})`, false);
+    let prefix;
+    if (isHistorical) {
+      prefix = targetDateTime.getTime() > Date.now() ? 'Forecast' : 'Historical';
+    } else {
+      prefix = source === 'manualdata' ? 'Recorded' : 'Live';
+    }
+    setStatus(`${prefix} — ${locationLabel} — ${reading.temp_c.toFixed(1)}°C, ${reading.rh.toFixed(0)}% RH (${heatZone(reading.temp_c, reading.rh)})`, false);
     document.getElementById('lastUpdated').textContent = 'Last updated: ' + reading.time.toLocaleString();
 
   } catch (err) {
@@ -592,6 +733,11 @@ function setupAutoRefresh() {
 }
 
 // ================== Init ==================
+(function initHistoricalDefaults() {
+  const now = new Date();
+  document.getElementById('histDate').value = isoDateStr(now);
+  document.getElementById('histTime').value = String(now.getHours()).padStart(2, '0') + ':00';
+})();
 onSourceChange();
 renderPlot(loadHistory());
 setupAutoRefresh();
