@@ -531,6 +531,9 @@ function chooseLocation(index) {
   selectedLocation = {lat: place.latitude, lon: place.longitude, label, inputValue: label};
   document.getElementById('locationSearch').value = label;
   hideLocationSuggestions();
+  if (document.getElementById('sourceSelect').value === 'location') {
+    fetchAndPlot();
+  }
 }
 
 function renderLocationSuggestions() {
