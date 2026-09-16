@@ -68,8 +68,9 @@ select, input[type="text"], input[type="search"] {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  max-height: 240px;
+  max-height: min(240px, 35vh);
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -77,8 +78,10 @@ select, input[type="text"], input[type="search"] {
 }
 .location-suggestions.hidden { display: none; }
 .location-option {
-  padding: 9px 10px;
+  padding: 11px 10px;
+  min-height: 44px;
   cursor: pointer;
+  touch-action: manipulation;
   font-size: 14px;
   line-height: 1.25;
   border-bottom: 1px solid #eee;
@@ -185,6 +188,8 @@ button {
 
   .zone-desc { font-size: 13px !important; }
   .source-note { font-size: 12px !important; }
+  .location-suggestions { max-height: 32vh; }
+  .location-option { padding: 13px 12px; min-height: 48px; font-size: 15px; }
 }
 
 @media (max-width: 420px) {
@@ -551,8 +556,7 @@ function renderLocationSuggestions() {
       option.className = 'location-option' + (index === activeLocationIndex ? ' active' : '');
       option.setAttribute('role', 'option');
       option.textContent = locationLabel(place) || place.name;
-      option.addEventListener('mousedown', event => {
-        event.preventDefault();
+      option.addEventListener('click', event => {
         chooseLocation(index);
       });
       box.appendChild(option);
