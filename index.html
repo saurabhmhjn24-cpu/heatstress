@@ -62,6 +62,29 @@ select, input[type="text"], input[type="search"] {
 .subfield.hidden { display: none; }
 
 .location-search-wrap { position: relative; }
+.location-search-wrap input { padding-right: 42px; }
+.location-search-wrap input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.location-clear {
+  position: absolute;
+  z-index: 1001;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #555;
+  font-size: 23px;
+  font-weight: 400;
+  line-height: 1;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.location-clear.visible { display: flex; }
+.location-clear:hover, .location-clear:focus { background: #e8e8e8; color: #111; }
 .location-suggestions {
   position: absolute;
   z-index: 1000;
@@ -240,6 +263,7 @@ button {
     <div class="subfield hidden" id="locationSearchFields">
       <div class="location-search-wrap">
         <input type="search" id="locationSearch" placeholder="Enter city or location e.g. New Delhi" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="locationSuggestions" aria-expanded="false">
+        <button type="button" id="clearLocationSearch" class="location-clear" aria-label="Clear location" title="Clear location">&times;</button>
         <div id="locationSuggestions" class="location-suggestions hidden" role="listbox"></div>
       </div>
       <div class="hint">Type at least 2 characters, then select a location from the suggestions.</div>
@@ -518,6 +542,13 @@ function hideLocationSuggestions() {
   activeLocationIndex = -1;
 }
 
+function updateLocationClearButton() {
+  document.getElementById('clearLocationSearch').classList.toggle(
+    'visible',
+    document.getElementById('locationSearch').value.length > 0
+  );
+}
+
 function showLocationMessage(message) {
   const box = document.getElementById('locationSuggestions');
   box.innerHTML = '';
@@ -535,6 +566,7 @@ function chooseLocation(index) {
   const label = locationLabel(place) || place.name;
   selectedLocation = {lat: place.latitude, lon: place.longitude, label, inputValue: label};
   document.getElementById('locationSearch').value = label;
+  updateLocationClearButton();
   hideLocationSuggestions();
   if (document.getElementById('sourceSelect').value === 'location') {
     fetchAndPlot();
@@ -598,6 +630,7 @@ async function updateLocationSuggestions() {
 
 const locationSearchInput = document.getElementById('locationSearch');
 locationSearchInput.addEventListener('input', () => {
+  updateLocationClearButton();
   clearTimeout(locationSearchTimer);
   const query = locationSearchInput.value.trim();
   selectedLocation = null;
@@ -629,6 +662,17 @@ locationSearchInput.addEventListener('keydown', event => {
   }
 });
 locationSearchInput.addEventListener('blur', () => setTimeout(hideLocationSuggestions, 150));
+document.getElementById('clearLocationSearch').addEventListener('click', () => {
+  clearTimeout(locationSearchTimer);
+  locationSearchRequest++;
+  locationMatches = [];
+  activeLocationIndex = -1;
+  selectedLocation = null;
+  locationSearchInput.value = '';
+  updateLocationClearButton();
+  hideLocationSuggestions();
+  locationSearchInput.focus();
+});
 
 // ================== Data fetchers ==================
 async function fetchOpenMeteo(lat, lon, targetDate) {
