@@ -171,6 +171,26 @@ button {
   100% { opacity: 1; }
 }
 
+.aqi-bar {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+.aqi-bar.hidden { display: none; }
+.aqi-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.aqi-header .aqi-value { font-size: 20px; }
+.aqi-header .aqi-category { font-size: 15px; }
+.aqi-details { font-size: 13px; line-height: 1.5; }
+.aqi-details div { margin-bottom: 2px; }
+
 .print-heading {
   display: none;
   text-align: center;
@@ -255,6 +275,19 @@ button {
   <div id="lastUpdated">—</div>
 </div>
 
+<div class="aqi-bar hidden" id="aqiBar">
+  <div class="aqi-header">
+    <span class="aqi-value" id="aqiValue">—</span>
+    <span class="aqi-category" id="aqiCategory">—</span>
+  </div>
+  <div class="aqi-details">
+    <div><strong>Health risk:</strong> <span id="aqiRisk"></span></div>
+    <div><strong>Advice — general population:</strong> <span id="aqiGeneral"></span></div>
+    <div><strong>Advice — vulnerable population:</strong> <span id="aqiVulnerable"></span></div>
+  </div>
+  <div class="hint">Estimated Indian National AQI, based on live pollutant readings for this location. Approximate — the official index uses 24-hour/8-hour averages, not a single instantaneous reading.</div>
+</div>
+
 <div class="controls">
   <div class="card">
     <label for="sourceSelect">Data source</label>
@@ -320,7 +353,7 @@ button {
 </div>
 
 <div class="source-note" style="margin-top: 15px; text-align: center; font-size: 14px; color: #555; font-style: italic;">
-  
+  Conceptualized and prepared by Saurabh Mahajan, Station Health Organisation Shakurbasti
 </div>
 </div>
 
@@ -377,6 +410,121 @@ function feelsLikeC(tempC, rh) {
   }
 
   return (hiF - 32) * 5 / 9;
+}
+
+// ================== Air Quality Index (Indian National AQI, CPCB) ==================
+// Shakurbasti weather station's fixed coordinates, used for AQI only (the
+// station itself doesn't report air quality — this uses its known location
+// to look up ambient air quality for the area from Open-Meteo).
+const SHAKURBASTI_COORDS = { lat: 28.6816, lon: 77.128 };
+
+// CPCB breakpoint tables: [concentration low, concentration high, AQI low, AQI high]
+// PM2.5/PM10/NO2/SO2/O3 in µg/m³ (24-hr or 8-hr averaging per CPCB spec); CO in mg/m³.
+const AQI_BREAKPOINTS = {
+  pm25: [[0,30,0,50],[31,60,51,100],[61,90,101,200],[91,120,201,300],[121,250,301,400],[251,380,401,500]],
+  pm10: [[0,50,0,50],[51,100,51,100],[101,250,101,200],[251,350,201,300],[351,430,301,400],[431,510,401,500]],
+  no2:  [[0,40,0,50],[41,80,51,100],[81,180,101,200],[181,280,201,300],[281,400,301,400],[401,500,401,500]],
+  so2:  [[0,40,0,50],[41,80,51,100],[81,380,101,200],[381,800,201,300],[801,1600,301,400],[1601,2100,401,500]],
+  co:   [[0,1.0,0,50],[1.1,2.0,51,100],[2.1,10,101,200],[10.1,17,201,300],[17.1,34,301,400],[34.1,50,401,500]],
+  o3:   [[0,50,0,50],[51,100,51,100],[101,168,101,200],[169,208,201,300],[209,748,301,400],[749,1000,401,500]]
+};
+
+function subIndex(conc, table) {
+  if (conc === undefined || conc === null || isNaN(conc)) return null;
+  for (const [cLow, cHigh, iLow, iHigh] of table) {
+    if (conc >= cLow && conc <= cHigh) {
+      return iLow + ((iHigh - iLow) / (cHigh - cLow)) * (conc - cLow);
+    }
+  }
+  // Above the table's highest breakpoint — cap at 500 (Severe ceiling).
+  return conc > table[table.length - 1][1] ? 500 : null;
+}
+
+// Overall Indian AQI = the highest of the available pollutant sub-indices.
+// Returns null if no usable pollutant data was returned at all.
+function computeIndianAQI(pollutants) {
+  const subs = {};
+  for (const key of Object.keys(AQI_BREAKPOINTS)) {
+    const si = subIndex(pollutants[key], AQI_BREAKPOINTS[key]);
+    if (si !== null) subs[key] = si;
+  }
+  const keys = Object.keys(subs);
+  if (keys.length === 0) return null;
+
+  let maxKey = keys[0];
+  for (const k of keys) if (subs[k] > subs[maxKey]) maxKey = k;
+
+  return { aqi: Math.round(subs[maxKey]), pollutant: maxKey, pollutantCount: keys.length };
+}
+
+// Category text mirrors the standard CPCB National AQI category descriptions.
+const AQI_CATEGORIES = [
+  { max: 50,  name: 'Good', color: '#4CAF50', textColor: '#fff',
+    risk: 'Low health risk.',
+    general: 'No special precautions needed.',
+    vulnerable: 'No special precautions needed.' },
+  { max: 100, name: 'Satisfactory', color: '#8BC34A', textColor: '#111',
+    risk: 'May cause minor breathing discomfort to sensitive individuals.',
+    general: 'No special precautions needed.',
+    vulnerable: 'Reduce prolonged or strenuous outdoor exertion.' },
+  { max: 200, name: 'Moderate', color: '#FFEB3B', textColor: '#111',
+    risk: 'May cause breathing or other discomfort to people with lung disease, children, and older adults.',
+    general: 'Reduce prolonged or strenuous outdoor exertion.',
+    vulnerable: 'Avoid prolonged or strenuous outdoor exertion.' },
+  { max: 300, name: 'Poor', color: '#FF9800', textColor: '#111',
+    risk: 'May cause breathing discomfort on prolonged exposure, and discomfort to people with heart disease.',
+    general: 'Avoid prolonged outdoor exertion.',
+    vulnerable: 'Avoid outdoor activity.' },
+  { max: 400, name: 'Very Poor', color: '#F44336', textColor: '#fff',
+    risk: 'May cause respiratory illness on prolonged exposure; more pronounced effects for those with existing heart or lung disease.',
+    general: 'Avoid outdoor activity, especially in early morning and late evening.',
+    vulnerable: 'Stay indoors and keep activity levels low.' },
+  { max: 500, name: 'Severe', color: '#B71C1C', textColor: '#fff',
+    risk: 'Affects healthy people and seriously impacts those with existing disease, even during light physical activity.',
+    general: 'Avoid all outdoor physical activity.',
+    vulnerable: 'Stay indoors and keep activity levels low.' }
+];
+
+function categorizeAQI(aqi) {
+  return AQI_CATEGORIES.find(c => aqi <= c.max) || AQI_CATEGORIES[AQI_CATEGORIES.length - 1];
+}
+
+async function fetchAQI(lat, lon) {
+  const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}` +
+              `&current=pm10,pm2_5,nitrogen_dioxide,sulphur_dioxide,ozone,carbon_monoxide&timezone=auto`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Air quality request failed (' + res.status + ')');
+  const d = await res.json();
+  if (!d.current) throw new Error('No current air quality data returned.');
+  const c = d.current;
+  const pollutants = {
+    pm25: c.pm2_5,
+    pm10: c.pm10,
+    no2: c.nitrogen_dioxide,
+    so2: c.sulphur_dioxide,
+    o3: c.ozone,
+    // Open-Meteo returns CO in µg/m³; CPCB's CO breakpoints are in mg/m³.
+    co: (c.carbon_monoxide !== undefined && c.carbon_monoxide !== null) ? c.carbon_monoxide / 1000 : undefined
+  };
+  return computeIndianAQI(pollutants);
+}
+
+function renderAQI(result) {
+  const bar = document.getElementById('aqiBar');
+  if (!result) {
+    bar.classList.add('hidden');
+    return;
+  }
+  const cat = categorizeAQI(result.aqi);
+  document.getElementById('aqiValue').textContent = `AQI ${result.aqi}`;
+  document.getElementById('aqiCategory').textContent = cat.name;
+  document.getElementById('aqiRisk').textContent = cat.risk;
+  document.getElementById('aqiGeneral').textContent = cat.general;
+  document.getElementById('aqiVulnerable').textContent = cat.vulnerable;
+  bar.style.background = cat.color;
+  bar.style.color = cat.textColor;
+  bar.style.borderColor = 'rgba(0,0,0,0.25)';
+  bar.classList.remove('hidden');
 }
 
 function buildBackground() {
@@ -781,11 +929,13 @@ async function fetchAndPlot() {
 
   try {
     let reading, locationLabel;
+    let aqiCoords = null; // set per-branch below; null means AQI isn't available for this source
 
     if (source === 'auto') {
       const {lat, lon} = await getBrowserLocation();
       reading = await fetchOpenMeteo(lat, lon, targetDateTime);
       locationLabel = await reverseGeocode(lat, lon);
+      aqiCoords = {lat, lon};
     } else if (source === 'location') {
       const inputValue = document.getElementById('locationSearch').value.trim();
       const place = selectedLocation && selectedLocation.inputValue === inputValue
@@ -793,12 +943,14 @@ async function fetchAndPlot() {
         : await searchLocation(inputValue);
       reading = await fetchOpenMeteo(place.lat, place.lon, targetDateTime);
       locationLabel = place.label;
+      aqiCoords = {lat: place.lat, lon: place.lon};
     } else if (source === 'manual') {
       const lat = parseFloat(document.getElementById('manualLat').value);
       const lon = parseFloat(document.getElementById('manualLon').value);
       if (isNaN(lat) || isNaN(lon)) throw new Error('Enter valid latitude and longitude.');
       reading = await fetchOpenMeteo(lat, lon, targetDateTime);
       locationLabel = await reverseGeocode(lat, lon);
+      aqiCoords = {lat, lon};
     } else if (source === 'manualdata') {
       // No API call at all — just read the two typed-in values directly.
       const temp = parseFloat(document.getElementById('manualTemp').value);
@@ -807,6 +959,7 @@ async function fetchAndPlot() {
       if (rh < 0 || rh > 100) throw new Error('Humidity must be between 0 and 100%.');
       reading = { temp_c: temp, rh: rh, time: targetDateTime || new Date() };
       locationLabel = 'Manually entered reading';
+      // No coordinates associated with a manually typed reading, so AQI stays unavailable.
     } else {
       const workerUrl = DEFAULT_WORKER_URL;
       if (!workerUrl || workerUrl.includes('YOUR-SUBDOMAIN')) {
@@ -814,6 +967,9 @@ async function fetchAndPlot() {
       }
       reading = await fetchAmbient(workerUrl, targetDateTime);
       locationLabel = 'Shakurbasti weather station';
+      // The station itself doesn't measure air quality — use its known
+      // fixed location to look up ambient AQI for that area instead.
+      aqiCoords = SHAKURBASTI_COORDS;
     }
 
     const history = loadHistory();
@@ -836,6 +992,19 @@ async function fetchAndPlot() {
     }
     setStatus(`${prefix} — ${locationLabel} — ${reading.temp_c.toFixed(1)}°C (feels like ${feels_c.toFixed(1)}°C), ${reading.rh.toFixed(0)}% RH (${heatZone(reading.temp_c, reading.rh)})`, false);
     document.getElementById('lastUpdated').textContent = 'Last updated: ' + reading.time.toLocaleString();
+
+    // AQI is additional context — fetched separately so a failure here never
+    // breaks or overwrites the main temperature/humidity result above.
+    if (aqiCoords) {
+      try {
+        const aqiResult = await fetchAQI(aqiCoords.lat, aqiCoords.lon);
+        renderAQI(aqiResult);
+      } catch (e) {
+        renderAQI(null);
+      }
+    } else {
+      renderAQI(null);
+    }
 
   } catch (err) {
     setStatus('Error: ' + err.message, true);
