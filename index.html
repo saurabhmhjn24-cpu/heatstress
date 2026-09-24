@@ -166,6 +166,8 @@ button {
   animation: pulse 2s infinite;
   flex-shrink: 0;
 }
+.status-main { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.status-aqi { display: inline-block; font-weight: 700; white-space: nowrap; padding: 3px 9px; border-radius: 999px; background: #dcecff; color: #19456a; }
 
 @keyframes pulse {
   0% { opacity: 1; }
@@ -173,32 +175,8 @@ button {
   100% { opacity: 1; }
 }
 
-.aqi-bar {
-  margin: 0 0 16px;
-  padding: 16px;
-  border-radius: 12px;
-  border: 1px solid #cbd5e1;
-  background: #f8fafc;
-  box-shadow: 0 3px 12px rgba(0,0,0,0.06);
-}
-.aqi-bar.hidden { display: none; }
-.aqi-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-weight: 700;
-}
-.aqi-value { font-size: 26px; line-height: 1.2; }
-.aqi-source { margin: 8px 0 0; color: #475569; font-size: 13px; line-height: 1.45; }
-.aqi-advice-button { width: auto; min-height: 42px; padding: 9px 14px; cursor: pointer; }
-.aqi-advice-button:disabled { opacity: .55; cursor: not-allowed; }
+#aqiAdviceButton:disabled { opacity: .55; cursor: not-allowed; }
 .aqi-modal-note { font-size: 13px; line-height: 1.5; color: #475569; margin-top: 16px; }
-@media (max-width: 420px) {
-  .aqi-header { align-items: stretch; }
-  .aqi-advice-button { width: 100%; }
-}
 
 .aqi-manual { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-top: 14px; }
 .aqi-manual label { flex: 1 1 170px; font-size: 14px; font-weight: 600; }
@@ -350,7 +328,7 @@ button {
 </div>
 
 <div class="status-bar" id="statusBar">
-  <div><span class="dot"></span><span id="statusText">Not connected yet.</span></div>
+  <div class="status-main"><span><span class="dot"></span><span id="statusText">Not connected yet.</span></span><span class="status-aqi" id="aqiValue" aria-live="polite">AQI —</span></div>
   <div id="lastUpdated">—</div>
 </div>
 
@@ -422,16 +400,8 @@ button {
   <button class="secondary" onclick="window.print()">Print / Save PDF</button>
   <button class="tertiary" onclick="clearHistory()">Clear Today's Points</button>
   <button class="quaternary" onclick="openAdvisory()">Heat Safety Advice</button>
-  <button class="quaternary" id="aqiToggle" type="button" onclick="toggleAQI()" aria-expanded="false" aria-controls="aqiBar">Air Quality Index</button>
+  <button class="quaternary" id="aqiAdviceButton" type="button" onclick="openAQIAdvisory()" disabled>AQI Health Advisory</button>
 </div>
-
-<section class="aqi-bar hidden" id="aqiBar" aria-label="Air Quality Index">
-  <div class="aqi-header">
-    <span class="aqi-value" id="aqiValue" aria-live="polite">AQI —</span>
-    <button class="quaternary aqi-advice-button" id="aqiAdviceButton" type="button" onclick="openAQIAdvisory()" disabled>AQI Health Advisory</button>
-  </div>
-  <p class="aqi-source" id="aqiSource" aria-live="polite">Select a location to load AQI.</p>
-</section>
 
 <div id="plot"></div>
 
@@ -690,19 +660,20 @@ function renderAQI(result, source = 'modelled') {
   currentAQI = result;
   currentAQISource = result?.source || source;
   const value = document.getElementById('aqiValue');
-  const sourceLabel = document.getElementById('aqiSource');
   const adviceButton = document.getElementById('aqiAdviceButton');
   if (!result) {
-    value.textContent = 'AQI unavailable for this location';
+    value.textContent = 'AQI unavailable';
+    value.title = 'No recent station reading or usable modelled estimate. You can enter AQI manually under Data source.';
+    value.style.background = '#e2e8f0';
     value.style.color = '#334155';
-    sourceLabel.textContent = 'No sufficiently recent station reading or usable modelled estimate. Select Enter AQI manually under Data source to use your own reading.';
     adviceButton.disabled = true;
     return;
   }
   const cat = categorizeAQI(result.aqi);
   value.textContent = `${currentAQISource === 'modelled' ? 'Estimated ' : ''}AQI ${result.aqi}`;
-  value.style.color = cat.textColor === '#fff' ? cat.color : '#334155';
-  sourceLabel.textContent = currentAQISource === 'cpcb'
+  value.style.background = cat.color;
+  value.style.color = cat.textColor;
+  value.title = currentAQISource === 'cpcb'
     ? `CPCB station: ${result.station} · ${result.distance.toFixed(1)} km away · ${result.time.toLocaleString()}`
     : currentAQISource === 'manual'
       ? 'Entered manually · not verified by this page'
@@ -728,20 +699,8 @@ document.getElementById('aqiManualForm').addEventListener('submit', e => {
   error.textContent = '';
   aqiSelectionVersion += 1;
   renderAQI({ aqi }, 'manual');
-  showAQIPanel();
   openAQIAdvisory();
 });
-
-function showAQIPanel() {
-  document.getElementById('aqiBar').classList.remove('hidden');
-  document.getElementById('aqiToggle').setAttribute('aria-expanded', 'true');
-}
-
-function toggleAQI() {
-  const panel = document.getElementById('aqiBar');
-  const visible = panel.classList.toggle('hidden') === false;
-  document.getElementById('aqiToggle').setAttribute('aria-expanded', String(visible));
-}
 
 function openAQIAdvisory() {
   if (!currentAQI) return;
@@ -768,7 +727,7 @@ function openAQIAdvisory() {
   const note = document.createElement('p');
   note.className = 'aqi-modal-note';
   note.textContent = currentAQISource === 'manual'
-    ? 'This advice is based on the AQI value you entered. Enter a new value to update it. Refresh Now will return to the location-based AQI when available.'
+    ? 'This advice is based on the AQI value you entered. Choose a location-based data source and refresh to return to an automatic AQI.'
     : currentAQISource === 'cpcb'
       ? `Measured station AQI reported by the CPCB data service: ${currentAQI.station}, ${currentAQI.distance.toFixed(1)} km away, at ${currentAQI.time.toLocaleString()}. Conditions at your exact location may differ.`
       : 'Estimated Indian AQI from Open-Meteo modelled pollutant data and rolling averages. This is not an official CPCB reading; local conditions may differ.';
@@ -950,10 +909,11 @@ function onSourceChange() {
   document.getElementById('useHistoricalToggle').closest('.card').classList.toggle('hidden', source === 'manualaqi');
   document.getElementById('aqiError').textContent = '';
   if (source === 'manualaqi') {
-    showAQIPanel();
     currentAQI = null;
     document.getElementById('aqiValue').textContent = 'AQI —';
-    document.getElementById('aqiSource').textContent = 'Enter a value in Data source to show AQI and its advisory.';
+    document.getElementById('aqiValue').title = 'Enter an AQI value under Data source.';
+    document.getElementById('aqiValue').style.background = '#dcecff';
+    document.getElementById('aqiValue').style.color = '#19456a';
     document.getElementById('aqiAdviceButton').disabled = true;
   }
   // ambientFields (worker URL + hint) stays hidden always — it's informational only
@@ -1357,9 +1317,10 @@ async function fetchAndPlot() {
     // breaks or overwrites the main temperature/humidity result above.
     if (aqiCoords) {
       if (aqiRequestVersion === aqiSelectionVersion) {
-        showAQIPanel();
         document.getElementById('aqiValue').textContent = 'Loading AQI…';
-        document.getElementById('aqiSource').textContent = 'Checking for a recent nearby station reading, then a modelled estimate.';
+        document.getElementById('aqiValue').title = 'Checking for a recent nearby station reading, then a modelled estimate.';
+        document.getElementById('aqiValue').style.background = '#dcecff';
+        document.getElementById('aqiValue').style.color = '#19456a';
         document.getElementById('aqiAdviceButton').disabled = true;
         currentAQI = null;
       }
@@ -1376,7 +1337,6 @@ async function fetchAndPlot() {
   } catch (err) {
     setStatus('Error: ' + err.message, true);
     if (aqiRequestVersion === aqiSelectionVersion) {
-      showAQIPanel();
       renderAQI(null);
     }
   }
