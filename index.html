@@ -602,40 +602,37 @@ function renderAQI(result) {
 }
 
 // ================== Health Advisory (modal) ==================
-// Practical, general occupational heat-safety guidance keyed to the same
-// Safe/Caution/Danger zones the chart already classifies each reading into.
-// This supplements, and does not replace, unit heat-injury SOPs.
+// General heat-safety guidance keyed to the chart's Safe/Caution/Danger zones.
 const HEAT_ADVISORY = {
   Safe: {
     color: '#4CAF50', textColor: '#fff',
-    summary: 'Conditions are within the safe range for normal training and outdoor duties.',
+    summary: 'Heat risk is lower, but basic precautions still help prevent heat illness.',
     actions: [
-      'Normal training schedule may proceed as planned.',
-      'Maintain routine hydration — water available at regular intervals.',
-      'No special restrictions required at this time.'
+      'Drink water regularly throughout the day; do not wait until you feel thirsty.',
+      'Wear loose, lightweight, light-coloured clothing when outdoors.',
+      'Use shade, a hat and sunscreen, and take breaks during outdoor activity.'
     ]
   },
   Caution: {
     color: '#FFEB3B', textColor: '#111',
     summary: 'Elevated heat stress risk. Increased vigilance and preventive measures are advisable.',
     actions: [
-      'Increase the rest-to-work ratio during strenuous activity.',
-      'Enforce hydration breaks roughly every 30–45 minutes.',
-      'Where possible, shift heavy exertion away from peak sun-exposure hours.',
-      'Use a buddy system so personnel can watch each other for early warning signs.',
-      'Ensure shaded or cooled rest areas are available nearby.'
+      'Drink water often; carry water when going outside.',
+      'Wear loose, breathable, light-coloured clothing and a hat.',
+      'Limit strenuous activity during the hottest hours; choose cooler times if possible.',
+      'Take frequent breaks in shade or an air-conditioned place.',
+      'Check on children, older adults and anyone who may need help staying cool.'
     ]
   },
   Danger: {
     color: '#F44336', textColor: '#fff',
     summary: 'High heat stress risk. Strenuous outdoor activity should be curtailed or rescheduled.',
     actions: [
-      'Suspend or significantly reduce strenuous outdoor training.',
-      'Reschedule essential activity to early morning or evening hours.',
-      'Enforce mandatory rest in shade or an air-conditioned space.',
-      'Increase hydration frequency; consider oral rehydration solutions.',
-      'Keep medical/first-aid personnel on standby.',
-      'Monitor personnel continuously for signs of heat illness.'
+      'Avoid strenuous outdoor activity and stay in an air-conditioned place if available.',
+      'If you must go outside, keep visits short, seek shade and wear loose, lightweight clothing.',
+      'Drink water regularly; replace fluids lost through heavy sweating.',
+      'Never leave children, other people or pets in a parked vehicle.',
+      'Check on people at greater risk and watch for signs of heat illness.'
     ]
   }
 };
@@ -663,7 +660,7 @@ function openAdvisory() {
 
   html += `<h3>Watch for — Heat Exhaustion</h3><ul>${HEAT_WARNING_SIGNS.exhaustion.map(s => `<li>${s}</li>`).join('')}</ul>`;
   html += `<h3>Watch for — Heat Stroke (medical emergency)</h3><ul>${HEAT_WARNING_SIGNS.stroke.map(s => `<li>${s}</li>`).join('')}</ul>`;
-  html += `<div class="advisory-emergency">This advisory supplements, and does not replace, unit heat-injury prevention SOPs and the judgement of medical staff. If heat stroke is suspected, begin emergency cooling immediately and seek urgent medical attention.</div>`;
+  html += `<div class="advisory-emergency">Heat stroke is a medical emergency. Call your local emergency number immediately, move the person to a cooler place and cool them with water, wet cloths or ice packs while help arrives. Do not give drinks to someone who is confused or unconscious.</div>`;
 
   body.innerHTML = html;
   document.getElementById('advisoryModal').classList.remove('hidden');
