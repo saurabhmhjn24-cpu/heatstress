@@ -173,26 +173,38 @@ button {
 }
 
 .aqi-bar {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(0,0,0,0.15);
+  margin: 0 0 16px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.06);
 }
 .aqi-bar.hidden { display: none; }
 .aqi-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 12px;
   font-weight: 700;
-  margin-bottom: 6px;
 }
-.aqi-header .aqi-value { font-size: 20px; }
-.aqi-header .aqi-category { font-size: 15px; }
-.aqi-details { font-size: 13px; line-height: 1.5; }
-.aqi-details div { margin-bottom: 2px; }
+.aqi-value { font-size: 26px; line-height: 1.2; }
+.aqi-advice-button { width: auto; min-height: 42px; padding: 9px 14px; cursor: pointer; }
+.aqi-advice-button:disabled { opacity: .55; cursor: not-allowed; }
+.aqi-modal-note { font-size: 13px; line-height: 1.5; color: #475569; margin-top: 16px; }
+@media (max-width: 420px) {
+  .aqi-header { align-items: stretch; }
+  .aqi-advice-button { width: 100%; }
+}
 
-/* ============ Health Advisory modal ============ */
+.aqi-manual { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-top: 14px; }
+.aqi-manual label { flex: 1 1 170px; font-size: 14px; font-weight: 600; }
+.aqi-manual input { display: block; width: 100%; margin-top: 5px; box-sizing: border-box; min-height: 42px; }
+.aqi-manual button { width: auto; min-height: 42px; padding: 9px 14px; }
+.aqi-error { color: #b42318; font-size: 13px; margin: 8px 0 0; }
+.aqi-error:empty { display: none; }
+/* ============ Advisory modals ============ */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -340,19 +352,6 @@ button {
   <div id="lastUpdated">—</div>
 </div>
 
-<div class="aqi-bar hidden" id="aqiBar">
-  <div class="aqi-header">
-    <span class="aqi-value" id="aqiValue">—</span>
-    <span class="aqi-category" id="aqiCategory">—</span>
-  </div>
-  <div class="aqi-details">
-    <div><strong>Health risk:</strong> <span id="aqiRisk"></span></div>
-    <div><strong>Advice — general population:</strong> <span id="aqiGeneral"></span></div>
-    <div><strong>Advice — vulnerable population:</strong> <span id="aqiVulnerable"></span></div>
-  </div>
-  <div class="hint">Estimated Indian National AQI, based on live pollutant readings for this location. Approximate — the official index uses 24-hour/8-hour averages, not a single instantaneous reading.</div>
-</div>
-
 <div class="controls">
   <div class="card">
     <label for="sourceSelect">Data source</label>
@@ -409,8 +408,23 @@ button {
   <button class="primary" onclick="fetchAndPlot()">Refresh Now</button>
   <button class="secondary" onclick="window.print()">Print / Save PDF</button>
   <button class="tertiary" onclick="clearHistory()">Clear Today's Points</button>
-  <button class="quaternary" onclick="openAdvisory()">Health Advisory</button>
+  <button class="quaternary" onclick="openAdvisory()">Heat Safety Advice</button>
+  <button class="quaternary" id="aqiToggle" type="button" onclick="toggleAQI()" aria-expanded="false" aria-controls="aqiBar">Air Quality Index</button>
 </div>
+
+<section class="aqi-bar hidden" id="aqiBar" aria-label="Air Quality Index">
+  <div class="aqi-header">
+    <span class="aqi-value" id="aqiValue" aria-live="polite">AQI —</span>
+    <button class="quaternary aqi-advice-button" id="aqiAdviceButton" type="button" onclick="openAQIAdvisory()" disabled>AQI Health Advisory</button>
+  </div>
+  <form class="aqi-manual" id="aqiManualForm" novalidate>
+    <label for="manualAQI">Enter AQI manually
+      <input id="manualAQI" type="number" min="0" max="500" step="1" inputmode="numeric" placeholder="0–500" required>
+    </label>
+    <button class="secondary" type="submit">Show AQI advice</button>
+  </form>
+  <p class="aqi-error" id="aqiError" role="alert"></p>
+</section>
 
 <div id="plot"></div>
 
@@ -426,8 +440,16 @@ button {
 <div class="modal-overlay hidden" id="advisoryModal" role="dialog" aria-modal="true" aria-labelledby="advisoryTitle">
   <div class="modal-box">
     <button class="modal-close" id="advisoryCloseBtn" aria-label="Close">&times;</button>
-    <h2 id="advisoryTitle">Health Advisory</h2>
+    <h2 id="advisoryTitle">Heat Safety Advice</h2>
     <div id="advisoryBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="aqiModal" role="dialog" aria-modal="true" aria-labelledby="aqiModalTitle">
+  <div class="modal-box">
+    <button class="modal-close" id="aqiCloseBtn" aria-label="Close">&times;</button>
+    <h2 id="aqiModalTitle">AQI Health Advisory</h2>
+    <div id="aqiModalBody"></div>
   </div>
 </div>
 
@@ -583,25 +605,98 @@ async function fetchAQI(lat, lon) {
   return computeIndianAQI(pollutants);
 }
 
-function renderAQI(result) {
-  const bar = document.getElementById('aqiBar');
+function renderAQI(result, source = 'modelled') {
+  currentAQI = result;
+  currentAQISource = source;
+  const value = document.getElementById('aqiValue');
+  const adviceButton = document.getElementById('aqiAdviceButton');
   if (!result) {
-    bar.classList.add('hidden');
+    value.textContent = 'AQI unavailable for this location';
+    value.style.color = '#334155';
+    adviceButton.disabled = true;
     return;
   }
   const cat = categorizeAQI(result.aqi);
-  document.getElementById('aqiValue').textContent = `AQI ${result.aqi}`;
-  document.getElementById('aqiCategory').textContent = cat.name;
-  document.getElementById('aqiRisk').textContent = cat.risk;
-  document.getElementById('aqiGeneral').textContent = cat.general;
-  document.getElementById('aqiVulnerable').textContent = cat.vulnerable;
-  bar.style.background = cat.color;
-  bar.style.color = cat.textColor;
-  bar.style.borderColor = 'rgba(0,0,0,0.25)';
-  bar.classList.remove('hidden');
+  value.textContent = `AQI ${result.aqi}`;
+  value.style.color = cat.textColor === '#fff' ? cat.color : '#334155';
+  adviceButton.disabled = false;
 }
 
-// ================== Health Advisory (modal) ==================
+let currentAQI = null;
+let currentAQISource = 'modelled';
+let aqiSelectionVersion = 0;
+
+document.getElementById('aqiManualForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const input = document.getElementById('manualAQI');
+  const raw = input.value.trim();
+  const aqi = Number(raw);
+  const error = document.getElementById('aqiError');
+  if (!raw || !Number.isInteger(aqi) || aqi < 0 || aqi > 500) {
+    error.textContent = 'Enter a whole-number AQI from 0 to 500.';
+    input.focus();
+    return;
+  }
+  error.textContent = '';
+  aqiSelectionVersion += 1;
+  renderAQI({ aqi }, 'manual');
+  openAQIAdvisory();
+});
+
+function toggleAQI() {
+  const panel = document.getElementById('aqiBar');
+  const visible = panel.classList.toggle('hidden') === false;
+  document.getElementById('aqiToggle').setAttribute('aria-expanded', String(visible));
+}
+
+function openAQIAdvisory() {
+  if (!currentAQI) return;
+  const cat = categorizeAQI(currentAQI.aqi);
+  const body = document.getElementById('aqiModalBody');
+  body.replaceChildren();
+  const zone = document.createElement('div');
+  zone.className = 'advisory-zone';
+  zone.style.background = cat.color;
+  zone.style.color = cat.textColor;
+  zone.textContent = `AQI ${currentAQI.aqi} — ${cat.name}`;
+  body.append(zone);
+  for (const [heading, message] of [
+    ['Health risk', cat.risk],
+    ['General advice', cat.general],
+    ['Advice for children, older adults and people with heart or lung conditions', cat.vulnerable]
+  ]) {
+    const title = document.createElement('h3');
+    title.textContent = heading;
+    const paragraph = document.createElement('p');
+    paragraph.textContent = message;
+    body.append(title, paragraph);
+  }
+  const note = document.createElement('p');
+  note.className = 'aqi-modal-note';
+  note.textContent = currentAQISource === 'manual'
+    ? 'This advice is based on the AQI value you entered. Enter a new value to update it. Refresh Now will return to the location-based AQI when available.'
+    : 'Estimated Indian National AQI from modelled air quality data for this location. It is approximate and may differ from official station readings and averaging periods.';
+  body.append(note);
+  document.getElementById('aqiModal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+  document.getElementById('aqiCloseBtn').focus();
+}
+
+function closeAQIAdvisory() {
+  document.getElementById('aqiModal').classList.add('hidden');
+  document.body.style.overflow = '';
+  document.getElementById('aqiAdviceButton').focus();
+}
+
+document.getElementById('aqiCloseBtn').addEventListener('click', closeAQIAdvisory);
+document.getElementById('aqiModal').addEventListener('click', e => {
+  if (e.target.id === 'aqiModal') closeAQIAdvisory();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !document.getElementById('aqiModal').classList.contains('hidden')) closeAQIAdvisory();
+});
+
+// ================== Heat Safety Advice (modal) ==================
 // General heat-safety guidance keyed to the chart's Safe/Caution/Danger zones.
 const HEAT_ADVISORY = {
   Safe: {
@@ -1067,6 +1162,7 @@ async function fetchAmbient(workerUrl, targetDate) {
 
 // ================== Main fetch + plot cycle ==================
 async function fetchAndPlot() {
+  const aqiRequestVersion = ++aqiSelectionVersion;
   const source = document.getElementById('sourceSelect').value;
 
   let targetDateTime;
@@ -1151,12 +1247,12 @@ async function fetchAndPlot() {
     if (aqiCoords) {
       try {
         const aqiResult = await fetchAQI(aqiCoords.lat, aqiCoords.lon);
-        renderAQI(aqiResult);
+        if (aqiRequestVersion === aqiSelectionVersion) renderAQI(aqiResult);
       } catch (e) {
-        renderAQI(null);
+        if (aqiRequestVersion === aqiSelectionVersion) renderAQI(null);
       }
     } else {
-      renderAQI(null);
+      if (aqiRequestVersion === aqiSelectionVersion) renderAQI(null);
     }
 
   } catch (err) {
