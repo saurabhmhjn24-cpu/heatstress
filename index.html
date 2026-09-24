@@ -43,6 +43,7 @@ body {
   width: 100%;
   min-width: 0;
 }
+.card.hidden { display: none; }
 
 .card label {
   font-size: 13px;
@@ -190,6 +191,7 @@ button {
   font-weight: 700;
 }
 .aqi-value { font-size: 26px; line-height: 1.2; }
+.aqi-source { margin: 8px 0 0; color: #475569; font-size: 13px; line-height: 1.45; }
 .aqi-advice-button { width: auto; min-height: 42px; padding: 9px 14px; cursor: pointer; }
 .aqi-advice-button:disabled { opacity: .55; cursor: not-allowed; }
 .aqi-modal-note { font-size: 13px; line-height: 1.5; color: #475569; margin-top: 16px; }
@@ -360,6 +362,7 @@ button {
       <option value="location">Search by location</option>
       <option value="manual">Manual coordinates</option>
       <option value="manualdata">Enter temperature &amp; humidity</option>
+      <option value="manualaqi">Enter AQI manually</option>
       <option value="ambient">Shakurbasti weather station</option>
     </select>
 
@@ -384,6 +387,16 @@ button {
         <input type="text" id="manualTemp" placeholder="Temperature °C e.g. 34.5" style="flex:1; min-width:120px;">
         <input type="text" id="manualRh" placeholder="Humidity % e.g. 55" style="flex:1; min-width:120px;">
       </div>
+    </div>
+
+    <div class="subfield hidden" id="manualAQIFields">
+      <form class="aqi-manual" id="aqiManualForm" novalidate>
+        <label for="manualAQI">AQI value
+          <input id="manualAQI" type="number" min="0" max="500" step="1" inputmode="numeric" placeholder="Enter a value from 0 to 500" required>
+        </label>
+        <button class="secondary" type="submit">Show AQI advice</button>
+      </form>
+      <p class="aqi-error" id="aqiError" role="alert"></p>
     </div>
 
     <div class="subfield hidden" id="ambientFields">
@@ -417,13 +430,7 @@ button {
     <span class="aqi-value" id="aqiValue" aria-live="polite">AQI —</span>
     <button class="quaternary aqi-advice-button" id="aqiAdviceButton" type="button" onclick="openAQIAdvisory()" disabled>AQI Health Advisory</button>
   </div>
-  <form class="aqi-manual" id="aqiManualForm" novalidate>
-    <label for="manualAQI">Enter AQI manually
-      <input id="manualAQI" type="number" min="0" max="500" step="1" inputmode="numeric" placeholder="0–500" required>
-    </label>
-    <button class="secondary" type="submit">Show AQI advice</button>
-  </form>
-  <p class="aqi-error" id="aqiError" role="alert"></p>
+  <p class="aqi-source" id="aqiSource" aria-live="polite">Select a location to load AQI.</p>
 </section>
 
 <div id="plot"></div>
@@ -459,6 +466,12 @@ button {
 // This is NOT a secret — it can't be used to pull your data without the keys
 // the worker holds — so it's fine that it lives in this public page's source.
 const DEFAULT_WORKER_URL = 'https://ambient-weather-proxy.heatstress.workers.dev';
+// Optional service for official CPCB station AQI. Keep any credentials on the
+// server, never in this public page. Return one station or {stations:[...]}.
+// Each station: {aqi, station, lat, lon, observed_at} with an ISO 8601
+// observed_at timestamp including a timezone (for example +05:30).
+// Leave blank until a service is deployed; Open-Meteo is then used.
+const CPCB_AQI_SERVICE_URL = '';
 
 // ================== Zone boundary math (unchanged from original) ==================
 function safeCautionBoundary(rh) {
@@ -545,7 +558,7 @@ function computeIndianAQI(pollutants) {
     if (si !== null) subs[key] = si;
   }
   const keys = Object.keys(subs);
-  if (keys.length === 0) return null;
+  if (keys.length < 3 || (!keys.includes('pm25') && !keys.includes('pm10'))) return null;
 
   let maxKey = keys[0];
   for (const k of keys) if (subs[k] > subs[maxKey]) maxKey = k;
@@ -585,40 +598,115 @@ function categorizeAQI(aqi) {
   return AQI_CATEGORIES.find(c => aqi <= c.max) || AQI_CATEGORIES[AQI_CATEGORIES.length - 1];
 }
 
-async function fetchAQI(lat, lon) {
+function distanceKm(a, b, c, d) {
+  const rad = Math.PI / 180;
+  const dl = (c - a) * rad;
+  const dn = (d - b) * rad;
+  const h = Math.sin(dl / 2) ** 2 + Math.cos(a * rad) * Math.cos(c * rad) * Math.sin(dn / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+async function fetchCPCBAQI(lat, lon) {
+  if (!CPCB_AQI_SERVICE_URL) return null;
+  const url = new URL(CPCB_AQI_SERVICE_URL, location.href);
+  url.searchParams.set('lat', lat);
+  url.searchParams.set('lon', lon);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const candidates = Array.isArray(payload.stations) ? payload.stations : [payload];
+    const now = Date.now();
+    const eligible = candidates.map(s => ({
+      ...s, aqi: Number(s.aqi), lat: Number(s.lat), lon: Number(s.lon),
+      time: Date.parse(s.observed_at)
+    })).filter(s => Number.isInteger(s.aqi) && s.aqi >= 0 && s.aqi <= 500 &&
+      s.station && Number.isFinite(s.lat) && Number.isFinite(s.lon) &&
+      Number.isFinite(s.time) && now - s.time >= -5 * 60000 &&
+      now - s.time <= 3 * 3600000)
+      .map(s => ({ ...s, distance: distanceKm(lat, lon, s.lat, s.lon) }))
+      .filter(s => s.distance <= 25).sort((a, b) => a.distance - b.distance);
+    if (!eligible.length) return null;
+    const nearest = eligible[0];
+    return { aqi: nearest.aqi, source: 'cpcb', station: String(nearest.station),
+      distance: nearest.distance, time: new Date(nearest.time) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function averageRecent(values, end, hours, minimum) {
+  const sample = values.slice(end - hours + 1, end + 1).filter(v => v != null && Number.isFinite(Number(v)) && Number(v) >= 0);
+  return sample.length >= minimum ? sample.reduce((sum, v) => sum + Number(v), 0) / sample.length : null;
+}
+
+function roundedAverage(values, end, hours, minimum, factor = 1) {
+  const average = averageRecent(values, end, hours, minimum);
+  return average === null ? null : Math.round(average * factor) / factor;
+}
+
+async function fetchModelledAQI(lat, lon) {
   const url = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}` +
-              `&current=pm10,pm2_5,nitrogen_dioxide,sulphur_dioxide,ozone,carbon_monoxide&timezone=auto`;
+              `&hourly=pm10,pm2_5,nitrogen_dioxide,sulphur_dioxide,ozone,carbon_monoxide&past_days=2&forecast_days=1&timezone=UTC`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('Air quality request failed (' + res.status + ')');
   const d = await res.json();
-  if (!d.current) throw new Error('No current air quality data returned.');
-  const c = d.current;
+  if (!d.hourly || !Array.isArray(d.hourly.time)) throw new Error('No hourly air quality data returned.');
+  const now = Date.now();
+  const end = d.hourly.time.reduce((best, time, i) => {
+    const timestamp = Date.parse(time + 'Z');
+    return Number.isFinite(timestamp) && timestamp <= now && timestamp > (best < 0 ? -Infinity : Date.parse(d.hourly.time[best] + 'Z')) ? i : best;
+  }, -1);
+  if (end < 0) return null;
+  const time = new Date(d.hourly.time[end] + 'Z');
+  if (now - time.getTime() > 6 * 3600000) return null;
+  const h = d.hourly;
   const pollutants = {
-    pm25: c.pm2_5,
-    pm10: c.pm10,
-    no2: c.nitrogen_dioxide,
-    so2: c.sulphur_dioxide,
-    o3: c.ozone,
-    // Open-Meteo returns CO in µg/m³; CPCB's CO breakpoints are in mg/m³.
-    co: (c.carbon_monoxide !== undefined && c.carbon_monoxide !== null) ? c.carbon_monoxide / 1000 : undefined
+    pm25: roundedAverage(h.pm2_5 || [], end, 24, 18),
+    pm10: roundedAverage(h.pm10 || [], end, 24, 18),
+    no2: roundedAverage(h.nitrogen_dioxide || [], end, 24, 18),
+    so2: roundedAverage(h.sulphur_dioxide || [], end, 24, 18),
+    o3: roundedAverage(h.ozone || [], end, 8, 6),
+    // Open-Meteo CO is in µg/m³; CPCB breakpoints are in mg/m³.
+    co: roundedAverage(h.carbon_monoxide || [], end, 8, 6, 1 / 100)
   };
-  return computeIndianAQI(pollutants);
+  if (pollutants.co !== null) pollutants.co /= 1000;
+  for (const key of Object.keys(pollutants)) if (!Number.isFinite(pollutants[key])) pollutants[key] = null;
+  const result = computeIndianAQI(pollutants);
+  return result ? { ...result, source: 'modelled', time } : null;
+}
+
+async function fetchAQI(lat, lon) {
+  try {
+    const station = await fetchCPCBAQI(lat, lon);
+    if (station) return station;
+  } catch (_) { /* Continue with the model when the station service fails. */ }
+  return fetchModelledAQI(lat, lon);
 }
 
 function renderAQI(result, source = 'modelled') {
   currentAQI = result;
-  currentAQISource = source;
+  currentAQISource = result?.source || source;
   const value = document.getElementById('aqiValue');
+  const sourceLabel = document.getElementById('aqiSource');
   const adviceButton = document.getElementById('aqiAdviceButton');
   if (!result) {
     value.textContent = 'AQI unavailable for this location';
     value.style.color = '#334155';
+    sourceLabel.textContent = 'No sufficiently recent station reading or usable modelled estimate. Select Enter AQI manually under Data source to use your own reading.';
     adviceButton.disabled = true;
     return;
   }
   const cat = categorizeAQI(result.aqi);
-  value.textContent = `AQI ${result.aqi}`;
+  value.textContent = `${currentAQISource === 'modelled' ? 'Estimated ' : ''}AQI ${result.aqi}`;
   value.style.color = cat.textColor === '#fff' ? cat.color : '#334155';
+  sourceLabel.textContent = currentAQISource === 'cpcb'
+    ? `CPCB station: ${result.station} · ${result.distance.toFixed(1)} km away · ${result.time.toLocaleString()}`
+    : currentAQISource === 'manual'
+      ? 'Entered manually · not verified by this page'
+      : `Open-Meteo model · ${result.time.toLocaleString()} · approximate Indian AQI from rolling pollutant averages`;
   adviceButton.disabled = false;
 }
 
@@ -640,8 +728,14 @@ document.getElementById('aqiManualForm').addEventListener('submit', e => {
   error.textContent = '';
   aqiSelectionVersion += 1;
   renderAQI({ aqi }, 'manual');
+  showAQIPanel();
   openAQIAdvisory();
 });
+
+function showAQIPanel() {
+  document.getElementById('aqiBar').classList.remove('hidden');
+  document.getElementById('aqiToggle').setAttribute('aria-expanded', 'true');
+}
 
 function toggleAQI() {
   const panel = document.getElementById('aqiBar');
@@ -675,7 +769,9 @@ function openAQIAdvisory() {
   note.className = 'aqi-modal-note';
   note.textContent = currentAQISource === 'manual'
     ? 'This advice is based on the AQI value you entered. Enter a new value to update it. Refresh Now will return to the location-based AQI when available.'
-    : 'Estimated Indian National AQI from modelled air quality data for this location. It is approximate and may differ from official station readings and averaging periods.';
+    : currentAQISource === 'cpcb'
+      ? `Measured station AQI reported by the CPCB data service: ${currentAQI.station}, ${currentAQI.distance.toFixed(1)} km away, at ${currentAQI.time.toLocaleString()}. Conditions at your exact location may differ.`
+      : 'Estimated Indian AQI from Open-Meteo modelled pollutant data and rolling averages. This is not an official CPCB reading; local conditions may differ.';
   body.append(note);
   document.getElementById('aqiModal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -845,10 +941,21 @@ function setStatus(text, isError) {
 
 function onSourceChange() {
   const source = document.getElementById('sourceSelect').value;
+  aqiSelectionVersion += 1;
   document.getElementById('locationSearchFields').classList.toggle('hidden', source !== 'location');
   if (source !== 'location' && typeof hideLocationSuggestions === 'function') hideLocationSuggestions();
   document.getElementById('manualFields').classList.toggle('hidden', source !== 'manual');
   document.getElementById('manualDataFields').classList.toggle('hidden', source !== 'manualdata');
+  document.getElementById('manualAQIFields').classList.toggle('hidden', source !== 'manualaqi');
+  document.getElementById('useHistoricalToggle').closest('.card').classList.toggle('hidden', source === 'manualaqi');
+  document.getElementById('aqiError').textContent = '';
+  if (source === 'manualaqi') {
+    showAQIPanel();
+    currentAQI = null;
+    document.getElementById('aqiValue').textContent = 'AQI —';
+    document.getElementById('aqiSource').textContent = 'Enter a value in Data source to show AQI and its advisory.';
+    document.getElementById('aqiAdviceButton').disabled = true;
+  }
   // ambientFields (worker URL + hint) stays hidden always — it's informational only
   // and fetchAndPlot() reads DEFAULT_WORKER_URL directly, not this field.
 }
@@ -1162,8 +1269,12 @@ async function fetchAmbient(workerUrl, targetDate) {
 
 // ================== Main fetch + plot cycle ==================
 async function fetchAndPlot() {
-  const aqiRequestVersion = ++aqiSelectionVersion;
   const source = document.getElementById('sourceSelect').value;
+  if (source === 'manualaqi') {
+    document.getElementById('aqiManualForm').requestSubmit();
+    return;
+  }
+  const aqiRequestVersion = ++aqiSelectionVersion;
 
   let targetDateTime;
   try {
@@ -1245,6 +1356,13 @@ async function fetchAndPlot() {
     // AQI is additional context — fetched separately so a failure here never
     // breaks or overwrites the main temperature/humidity result above.
     if (aqiCoords) {
+      if (aqiRequestVersion === aqiSelectionVersion) {
+        showAQIPanel();
+        document.getElementById('aqiValue').textContent = 'Loading AQI…';
+        document.getElementById('aqiSource').textContent = 'Checking for a recent nearby station reading, then a modelled estimate.';
+        document.getElementById('aqiAdviceButton').disabled = true;
+        currentAQI = null;
+      }
       try {
         const aqiResult = await fetchAQI(aqiCoords.lat, aqiCoords.lon);
         if (aqiRequestVersion === aqiSelectionVersion) renderAQI(aqiResult);
@@ -1257,6 +1375,10 @@ async function fetchAndPlot() {
 
   } catch (err) {
     setStatus('Error: ' + err.message, true);
+    if (aqiRequestVersion === aqiSelectionVersion) {
+      showAQIPanel();
+      renderAQI(null);
+    }
   }
 }
 
