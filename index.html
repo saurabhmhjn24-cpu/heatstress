@@ -492,10 +492,7 @@ function feelsLikeC(tempC, rh) {
 }
 
 // ================== Air Quality Index (Indian National AQI, CPCB) ==================
-// Shakurbasti weather station's fixed coordinates, used for AQI only (the
-// station itself doesn't report air quality — this uses its known location
-// to look up ambient air quality for the area from Open-Meteo).
-const SHAKURBASTI_COORDS = { lat: 28.6816, lon: 77.128 };
+// The Shakurbasti weather station reports temperature and humidity, not AQI.
 
 // CPCB breakpoint tables: [concentration low, concentration high, AQI low, AQI high]
 // PM2.5/PM10/NO2/SO2/O3 in µg/m³ (24-hr or 8-hr averaging per CPCB spec); CO in mg/m³.
@@ -656,14 +653,14 @@ async function fetchAQI(lat, lon) {
   return fetchModelledAQI(lat, lon);
 }
 
-function renderAQI(result, source = 'modelled') {
+function renderAQI(result, source = 'modelled', unavailableReason = '') {
   currentAQI = result;
   currentAQISource = result?.source || source;
   const value = document.getElementById('aqiValue');
   const adviceButton = document.getElementById('aqiAdviceButton');
   if (!result) {
-    value.textContent = 'AQI unavailable';
-    value.title = 'No recent station reading or usable modelled estimate. You can enter AQI manually under Data source.';
+    value.textContent = unavailableReason ? 'AQI unavailable (no record)' : 'AQI unavailable';
+    value.title = unavailableReason || 'No recent station reading or usable modelled estimate. You can enter AQI manually under Data source.';
     value.style.background = '#e2e8f0';
     value.style.color = '#334155';
     adviceButton.disabled = true;
@@ -915,6 +912,17 @@ function onSourceChange() {
     document.getElementById('aqiValue').style.background = '#dcecff';
     document.getElementById('aqiValue').style.color = '#19456a';
     document.getElementById('aqiAdviceButton').disabled = true;
+  } else if (source === 'ambient') {
+    renderAQI(null, 'modelled', 'Shakurbasti weather station has no AQI record.');
+  } else if (document.getElementById('useHistoricalToggle').checked) {
+    renderAQI(null, 'modelled', 'No AQI record is linked to the selected historical or forecast time.');
+  } else {
+    currentAQI = null;
+    document.getElementById('aqiValue').textContent = 'AQI —';
+    document.getElementById('aqiValue').title = 'Refresh to load AQI for this location.';
+    document.getElementById('aqiValue').style.background = '#dcecff';
+    document.getElementById('aqiValue').style.color = '#19456a';
+    document.getElementById('aqiAdviceButton').disabled = true;
   }
   // ambientFields (worker URL + hint) stays hidden always — it's informational only
   // and fetchAndPlot() reads DEFAULT_WORKER_URL directly, not this field.
@@ -922,8 +930,10 @@ function onSourceChange() {
 
 // ================== Historical / Forecast date & time selection ==================
 function onHistoricalToggle() {
+  aqiSelectionVersion += 1;
   const checked = document.getElementById('useHistoricalToggle').checked;
   document.getElementById('historicalFields').classList.toggle('hidden', !checked);
+  onSourceChange();
 }
 
 // Returns a JS Date for the chosen historical/forecast point, or null if the
@@ -1245,6 +1255,11 @@ async function fetchAndPlot() {
   }
   const isHistorical = targetDateTime !== null;
 
+  const noAQIRecord = source === 'ambient'
+    ? 'Shakurbasti weather station has no AQI record.'
+    : isHistorical ? 'No AQI record is linked to the selected historical or forecast time.' : '';
+  if (noAQIRecord) renderAQI(null, 'modelled', noAQIRecord);
+
   setStatus(isHistorical ? 'Fetching historical/forecast reading…' : 'Fetching latest reading…', false);
 
   try {
@@ -1287,9 +1302,7 @@ async function fetchAndPlot() {
       }
       reading = await fetchAmbient(workerUrl, targetDateTime);
       locationLabel = 'Shakurbasti weather station';
-      // The station itself doesn't measure air quality — use its known
-      // fixed location to look up ambient AQI for that area instead.
-      aqiCoords = SHAKURBASTI_COORDS;
+      // This station does not provide an AQI measurement.
     }
 
     const history = loadHistory();
@@ -1315,7 +1328,7 @@ async function fetchAndPlot() {
 
     // AQI is additional context — fetched separately so a failure here never
     // breaks or overwrites the main temperature/humidity result above.
-    if (aqiCoords) {
+    if (aqiCoords && !isHistorical) {
       if (aqiRequestVersion === aqiSelectionVersion) {
         document.getElementById('aqiValue').textContent = 'Loading AQI…';
         document.getElementById('aqiValue').title = 'Checking for a recent nearby station reading, then a modelled estimate.';
@@ -1331,13 +1344,13 @@ async function fetchAndPlot() {
         if (aqiRequestVersion === aqiSelectionVersion) renderAQI(null);
       }
     } else {
-      if (aqiRequestVersion === aqiSelectionVersion) renderAQI(null);
+      if (aqiRequestVersion === aqiSelectionVersion) renderAQI(null, 'modelled', noAQIRecord);
     }
 
   } catch (err) {
     setStatus('Error: ' + err.message, true);
     if (aqiRequestVersion === aqiSelectionVersion) {
-      renderAQI(null);
+      renderAQI(null, 'modelled', noAQIRecord);
     }
   }
 }
