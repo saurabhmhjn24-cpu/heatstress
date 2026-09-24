@@ -29,7 +29,7 @@ body {
 
 .controls {
   display: grid;
-  grid-template-columns: 1fr 1fr auto auto auto;
+  grid-template-columns: 1fr 1fr auto auto auto auto;
   gap: 10px;
   align-items: end;
   margin-bottom: 12px;
@@ -129,6 +129,7 @@ button {
 .primary { background: #0b5; color: white; }
 .secondary { background: #333; color: white; }
 .tertiary { background: #b00; color: white; }
+.quaternary { background: #1976D2; color: white; }
 
 #plot {
   width: 100%;
@@ -190,6 +191,70 @@ button {
 .aqi-header .aqi-category { font-size: 15px; }
 .aqi-details { font-size: 13px; line-height: 1.5; }
 .aqi-details div { margin-bottom: 2px; }
+
+/* ============ Health Advisory modal ============ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 16px;
+}
+.modal-overlay.hidden { display: none; }
+.modal-box {
+  background: #fff;
+  border-radius: 12px;
+  max-width: 560px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 22px 24px;
+  position: relative;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+}
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #eee;
+  color: #333;
+  font-size: 22px;
+  line-height: 1;
+  border: 0;
+  cursor: pointer;
+}
+.modal-close:hover { background: #ddd; }
+.modal-box h2 { margin-top: 0; margin-bottom: 4px; font-size: 20px; }
+.modal-box h3 { margin: 16px 0 6px; font-size: 15px; }
+.modal-box ul { margin: 4px 0; padding-left: 20px; }
+.modal-box li { margin-bottom: 4px; font-size: 14px; line-height: 1.4; }
+.advisory-zone {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin: 10px 0 4px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.advisory-emergency {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  font-size: 13px;
+  line-height: 1.5;
+}
+@media print { .modal-overlay { display: none !important; } }
+@media (max-width: 420px) {
+  .modal-box { padding: 18px 16px; max-height: 90vh; }
+}
 
 .print-heading {
   display: none;
@@ -344,6 +409,7 @@ button {
   <button class="primary" onclick="fetchAndPlot()">Refresh Now</button>
   <button class="secondary" onclick="window.print()">Print / Save PDF</button>
   <button class="tertiary" onclick="clearHistory()">Clear Today's Points</button>
+  <button class="quaternary" onclick="openAdvisory()">Health Advisory</button>
 </div>
 
 <div id="plot"></div>
@@ -355,6 +421,14 @@ button {
 <div class="source-note" style="margin-top: 15px; text-align: center; font-size: 14px; color: #555; font-style: italic;">
   Conceptualized and prepared by Saurabh Mahajan, Station Health Organisation Shakurbasti
 </div>
+</div>
+
+<div class="modal-overlay hidden" id="advisoryModal" role="dialog" aria-modal="true" aria-labelledby="advisoryTitle">
+  <div class="modal-box">
+    <button class="modal-close" id="advisoryCloseBtn" aria-label="Close">&times;</button>
+    <h2 id="advisoryTitle">Health Advisory</h2>
+    <div id="advisoryBody"></div>
+  </div>
 </div>
 
 <script>
@@ -526,6 +600,88 @@ function renderAQI(result) {
   bar.style.borderColor = 'rgba(0,0,0,0.25)';
   bar.classList.remove('hidden');
 }
+
+// ================== Health Advisory (modal) ==================
+// Practical, general occupational heat-safety guidance keyed to the same
+// Safe/Caution/Danger zones the chart already classifies each reading into.
+// This supplements, and does not replace, unit heat-injury SOPs.
+const HEAT_ADVISORY = {
+  Safe: {
+    color: '#4CAF50', textColor: '#fff',
+    summary: 'Conditions are within the safe range for normal training and outdoor duties.',
+    actions: [
+      'Normal training schedule may proceed as planned.',
+      'Maintain routine hydration — water available at regular intervals.',
+      'No special restrictions required at this time.'
+    ]
+  },
+  Caution: {
+    color: '#FFEB3B', textColor: '#111',
+    summary: 'Elevated heat stress risk. Increased vigilance and preventive measures are advisable.',
+    actions: [
+      'Increase the rest-to-work ratio during strenuous activity.',
+      'Enforce hydration breaks roughly every 30–45 minutes.',
+      'Where possible, shift heavy exertion away from peak sun-exposure hours.',
+      'Use a buddy system so personnel can watch each other for early warning signs.',
+      'Ensure shaded or cooled rest areas are available nearby.'
+    ]
+  },
+  Danger: {
+    color: '#F44336', textColor: '#fff',
+    summary: 'High heat stress risk. Strenuous outdoor activity should be curtailed or rescheduled.',
+    actions: [
+      'Suspend or significantly reduce strenuous outdoor training.',
+      'Reschedule essential activity to early morning or evening hours.',
+      'Enforce mandatory rest in shade or an air-conditioned space.',
+      'Increase hydration frequency; consider oral rehydration solutions.',
+      'Keep medical/first-aid personnel on standby.',
+      'Monitor personnel continuously for signs of heat illness.'
+    ]
+  }
+};
+
+const HEAT_WARNING_SIGNS = {
+  exhaustion: ['Heavy sweating', 'Cold, pale, or clammy skin', 'Fast, weak pulse', 'Nausea or vomiting', 'Muscle cramps', 'Fatigue or dizziness'],
+  stroke: ['Hot, dry or damp skin with little/no sweating', 'Rapid, strong pulse', 'Confusion, agitation, or loss of consciousness', 'Very high body temperature', 'Throbbing headache']
+};
+
+function openAdvisory() {
+  const body = document.getElementById('advisoryBody');
+  let html = '';
+
+  if (lastHistory.length === 0) {
+    html += '<p>No reading has been taken yet on this page. Click "Refresh Now" first for a current assessment — general guidance is shown below in the meantime.</p>';
+  } else {
+    const last = lastHistory[lastHistory.length - 1];
+    const zone = heatZone(last.temp_c, last.rh);
+    const adv = HEAT_ADVISORY[zone];
+    html += `<div class="advisory-zone" style="background:${adv.color}; color:${adv.textColor};">
+      <strong>Current zone: ${zone}</strong> (${last.temp_c}°C, ${last.rh}% RH, feels like ${last.feels_c !== undefined ? last.feels_c : Math.round(feelsLikeC(last.temp_c, last.rh) * 10) / 10}°C)<br>${adv.summary}
+    </div>`;
+    html += '<h3>Recommended actions</h3><ul>' + adv.actions.map(a => `<li>${a}</li>`).join('') + '</ul>';
+  }
+
+  html += `<h3>Watch for — Heat Exhaustion</h3><ul>${HEAT_WARNING_SIGNS.exhaustion.map(s => `<li>${s}</li>`).join('')}</ul>`;
+  html += `<h3>Watch for — Heat Stroke (medical emergency)</h3><ul>${HEAT_WARNING_SIGNS.stroke.map(s => `<li>${s}</li>`).join('')}</ul>`;
+  html += `<div class="advisory-emergency">This advisory supplements, and does not replace, unit heat-injury prevention SOPs and the judgement of medical staff. If heat stroke is suspected, begin emergency cooling immediately and seek urgent medical attention.</div>`;
+
+  body.innerHTML = html;
+  document.getElementById('advisoryModal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeAdvisory() {
+  document.getElementById('advisoryModal').classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+document.getElementById('advisoryCloseBtn').addEventListener('click', closeAdvisory);
+document.getElementById('advisoryModal').addEventListener('click', (e) => {
+  if (e.target.id === 'advisoryModal') closeAdvisory(); // click on the dark overlay, not the box itself
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.getElementById('advisoryModal').classList.contains('hidden')) closeAdvisory();
+});
 
 function buildBackground() {
   const rh = [];
