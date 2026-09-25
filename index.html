@@ -166,7 +166,9 @@ button {
   animation: pulse 2s infinite;
   flex-shrink: 0;
 }
-.status-main { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.status-main { display: flex; flex: 1 1 560px; min-width: 0; flex-direction: column; align-items: flex-start; gap: 10px; }
+.status-aqi-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-top: 8px; border-top: 1px solid #c8ddeb; width: 100%; }
+.status-aqi-label { font-weight: 600; color: #334155; }
 .status-aqi { display: inline-block; font-weight: 700; white-space: nowrap; padding: 3px 9px; border-radius: 999px; background: #dcecff; color: #19456a; }
 
 @keyframes pulse {
@@ -328,7 +330,10 @@ button {
 </div>
 
 <div class="status-bar" id="statusBar">
-  <div class="status-main"><span><span class="dot"></span><span id="statusText">Not connected yet.</span></span><span class="status-aqi" id="aqiValue" aria-live="polite">AQI —</span></div>
+  <div class="status-main">
+    <div><span class="dot"></span><span id="statusText">Not connected yet.</span></div>
+    <div class="status-aqi-row"><span class="status-aqi-label">Air quality</span><span class="status-aqi" id="aqiValue" aria-live="polite">AQI —</span></div>
+  </div>
   <div id="lastUpdated">—</div>
 </div>
 
