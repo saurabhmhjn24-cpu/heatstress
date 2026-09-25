@@ -1323,7 +1323,7 @@ async function fetchAndPlot() {
     } else {
       prefix = source === 'manualdata' ? 'Recorded' : 'Live';
     }
-    setStatus(`${prefix} — ${locationLabel} — ${reading.temp_c.toFixed(1)}°C (feels like ${feels_c.toFixed(1)}°C), ${reading.rh.toFixed(0)}% RH (${heatZone(reading.temp_c, reading.rh)})`, false);
+    setStatus(`${prefix} — ${locationLabel}: At ${reading.temp_c.toFixed(1)}°C and ${reading.rh.toFixed(0)}% relative humidity, it feels like ${feels_c.toFixed(1)}°C. Heat stress zone: ${heatZone(reading.temp_c, reading.rh)}.`, false);
     document.getElementById('lastUpdated').textContent = 'Last updated: ' + reading.time.toLocaleString();
 
     // AQI is additional context — fetched separately so a failure here never
